@@ -4,6 +4,10 @@
  * Complete project details at https://github.com/l30n1d4/beehivebalance
 */
 
+// Define how you're planning to connect to the internet
+#define TINY_GSM_USE_GPRS false
+#define TINY_GSM_USE_WIFI true
+
 // Your GPRS credentials (leave empty, if not needed)
 const char apn[]      = "web.kenamobile.it";              // APN (example: internet.vodafone.pt) use https://wiki.apnchanger.org
 const char gprsUser[] = "";                               // GPRS User
@@ -11,6 +15,10 @@ const char gprsPass[] = "";                               // GPRS Password
 
 // SIM card PIN (leave empty, if not defined)
 const char simPIN[]   = ""; 
+
+// Your WIFI credentials (leave empty, if not needed)
+const char ssid[]     = "................";               // SSID
+const char wifiPass[] = "................";               // WIFI Password
 
 // Server details
 // The server variable can be just a domain name or it can have a subdomain. It depends on the service you are using
@@ -48,6 +56,20 @@ String apiKeyValue = "tPmAT5Ab3j7F9";
 
 #include <Wire.h>
 #include <TinyGsmClient.h>
+
+// Just in case someone defined the wrong thing..
+#if TINY_GSM_USE_GPRS && not defined TINY_GSM_MODEM_HAS_GPRS
+#undef TINY_GSM_USE_GPRS
+#undef TINY_GSM_USE_WIFI
+#define TINY_GSM_USE_GPRS false
+#define TINY_GSM_USE_WIFI true
+#endif
+#if TINY_GSM_USE_WIFI && not defined TINY_GSM_MODEM_HAS_WIFI
+#undef TINY_GSM_USE_GPRS
+#undef TINY_GSM_USE_WIFI
+#define TINY_GSM_USE_GPRS true
+#define TINY_GSM_USE_WIFI false
+#endif
 
 #ifdef DUMP_AT_COMMANDS
   #include <StreamDebugger.h>
@@ -121,10 +143,12 @@ void setup() {
   SerialMon.print("Modem: ");
   SerialMon.println(modemInfo);
 
+  #if TINY_GSM_USE_GPRS
   // Unlock your SIM card with a PIN if needed
   if (strlen(simPIN) && modem.getSimStatus() != 3 ) {
     modem.simUnlock(simPIN);
   }
+  #endif
   
   // You might need to change the BME280 I2C address, in our case it's 0x76
   if (!bme.begin(0x76, &I2CBME)) {
@@ -137,10 +161,25 @@ void setup() {
 }
 
 void loop() {
+  SerialMon.println("Temp: " + String(bme.readTemperature()));
+  SerialMon.println("Humi: " + String(bme.readHumidity()));
+  SerialMon.println("Pres: " + String(bme.readPressure()/100.0F));
+  bool connect = false;
+#if TINY_GSM_USE_GPRS
   SerialMon.print("Connecting to APN: ");
   SerialMon.print(apn);
-  if (!modem.gprsConnect(apn, gprsUser, gprsPass)) {
+  connect = modem.gprsConnect(apn, gprsUser, gprsPass);
+#endif
+#if TINY_GSM_USE_WIFI
+  SerialMon.print("Connecting to WIFI: ");
+  SerialMon.print(ssid);
+  connect = modem.networkConnect(ssid, wifiPass);
+#endif
+  if (!connect) {
     SerialMon.println(" fail");
+    delay(30000);
+    //reboot
+    while(1);
   }
   else {
     SerialMon.println(" OK");
@@ -155,9 +194,8 @@ void loop() {
       // Making an HTTP POST request
       SerialMon.println("Performing HTTP POST request...");
       // Prepare your HTTP POST request data (Temperature in Celsius degrees)
-//      String httpRequestData = "api_key=" + apiKeyValue + "&value1=" + String(bme.readTemperature())
-//                             + "&value2=" + String(bme.readHumidity()) + "&value3=" + String(bme.readPressure()/100.0F) + "";  
-      String httpRequestData = "api_key=tPmAT5Ab3j7F9&value1=24.75&value2=49.54&value3=1005.14";
+      String httpRequestData = "api_key=" + apiKeyValue + "&value1=" + String(bme.readTemperature())
+                             + "&value2=" + String(bme.readHumidity()) + "&value3=" + String(bme.readPressure()/100.0F) + "";  
     
       client.print(String("POST ") + resource + " HTTP/1.1\r\n");
       client.print(String("Host: ") + server + "\r\n");
@@ -182,8 +220,14 @@ void loop() {
       // Close client and disconnect
       client.stop();
       SerialMon.println(F("Server disconnected"));
+#if TINY_GSM_USE_GPRS
       modem.gprsDisconnect();
       SerialMon.println(F("GPRS disconnected"));
+#endif
+#if TINY_GSM_USE_WIFI
+      modem.networkDisconnect();
+      SerialMon.println(F("WiFi disconnected"));
+#endif
     }
   } 
   // Put ESP32 into deep sleep mode (with timer wake up)
