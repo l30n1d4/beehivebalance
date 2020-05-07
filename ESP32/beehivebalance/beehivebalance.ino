@@ -41,6 +41,9 @@ String apiKeyValue = "tPmAT5Ab3j7F9";
 // BME280 pins
 #define I2C_SDA_2            18
 #define I2C_SCL_2            19
+// HX711 pins
+#define LOADCELL_DOUT_PIN    33
+#define LOADCELL_SCK_PIN     32
 
 // Set serial for debug console (to Serial Monitor, default speed 115200)
 #define SerialMon Serial
@@ -57,6 +60,10 @@ String apiKeyValue = "tPmAT5Ab3j7F9";
 #include <Wire.h>
 #include <TinyGsmClient.h>
 #include <WiFi.h>
+#include <soc/rtc.h>               // for downspeed clock https://github.com/bogde/HX711/issues/75
+#include <HX711.h>
+
+HX711 scale;
 
 #ifdef DUMP_AT_COMMANDS
   #include <StreamDebugger.h>
@@ -99,6 +106,8 @@ bool setPowerBoostKeepOn(int en){
 }
 
 void setup() {
+  rtc_clk_cpu_freq_set(RTC_CPU_FREQ_80M);  // for downspeed clock https://github.com/bogde/HX711/issues/75
+  
   // Set serial monitor debugging window baud rate to 115200
   SerialMon.begin(115200);
 
@@ -145,22 +154,35 @@ void setup() {
     Serial.println("Could not find a valid BME280 sensor, check wiring!");
     while (1);
   }
-
-#if TINY_GSM_USE_GPRS
-SerialMon.println("TINY_GSM_USE_GPRS");
-#endif
-#if TINY_GSM_USE_WIFI
-SerialMon.println("TINY_GSM_USE_WIFI");
-#endif
+  
+  //init HX711
+  SerialMon.print("Starting HX711: ");
+  scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
+  SerialMon.println("OK");
 
   // Configure the wake up source as timer wake up  
   esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
 }
 
 void loop() {
+  scale.power_up();
+  delay(500);
+  scale.set_scale(2280.f);                        // this value is obtained by calibrating the scale with known weights
+  scale.tare();                                   // reset the scale to 0
+  SerialMon.print("get_units() = ");
+  SerialMon.println(scale.get_units(), 1);
+  SerialMon.println("metti un peso entro 3s...");
+  delay(3000);
+  SerialMon.print("get_units() = ");
+  SerialMon.println(scale.get_units(), 1);
+  float weight = scale.get_units();
+
+  scale.power_down();              // put the ADC in sleep mode
+  
   SerialMon.println("Temp: " + String(bme.readTemperature()));
   SerialMon.println("Humi: " + String(bme.readHumidity()));
   SerialMon.println("Pres: " + String(bme.readPressure()/100.0F));
+  
   bool connect = false;
 #if TINY_GSM_USE_GPRS
   SerialMon.print("Connecting to APN: ");
@@ -198,8 +220,11 @@ void loop() {
       // Making an HTTP POST request
       SerialMon.println("Performing HTTP POST request...");
       // Prepare your HTTP POST request data (Temperature in Celsius degrees)
-      String httpRequestData = "api_key=" + apiKeyValue + "&value1=" + String(bme.readTemperature())
-                             + "&value2=" + String(bme.readHumidity()) + "&value3=" + String(bme.readPressure()/100.0F) + "";  
+      String httpRequestData = "api_key=" + apiKeyValue
+                             + "&temperature=" + String(bme.readTemperature())
+                             + "&humidity=" + String(bme.readHumidity())
+                             + "&pressure=" + String(bme.readPressure()/100.0F)
+                             + "&wight=" + String(weight);
     
       client.print(String("POST ") + resource + " HTTP/1.1\r\n");
       client.print(String("Host: ") + server + "\r\n");
