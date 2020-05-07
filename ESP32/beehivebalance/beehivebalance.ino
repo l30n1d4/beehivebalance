@@ -56,20 +56,7 @@ String apiKeyValue = "tPmAT5Ab3j7F9";
 
 #include <Wire.h>
 #include <TinyGsmClient.h>
-
-// Just in case someone defined the wrong thing..
-#if TINY_GSM_USE_GPRS && not defined TINY_GSM_MODEM_HAS_GPRS
-#undef TINY_GSM_USE_GPRS
-#undef TINY_GSM_USE_WIFI
-#define TINY_GSM_USE_GPRS false
-#define TINY_GSM_USE_WIFI true
-#endif
-#if TINY_GSM_USE_WIFI && not defined TINY_GSM_MODEM_HAS_WIFI
-#undef TINY_GSM_USE_GPRS
-#undef TINY_GSM_USE_WIFI
-#define TINY_GSM_USE_GPRS true
-#define TINY_GSM_USE_WIFI false
-#endif
+#include <WiFi.h>
 
 #ifdef DUMP_AT_COMMANDS
   #include <StreamDebugger.h>
@@ -89,8 +76,10 @@ TwoWire I2CPower = TwoWire(0);
 TwoWire I2CBME = TwoWire(1);
 Adafruit_BME280 bme; 
 
+#if TINY_GSM_USE_GPRS
 // TinyGSM Client for Internet connection
 TinyGsmClient client(modem);
+#endif
 
 #define uS_TO_S_FACTOR 1000000     /* Conversion factor for micro seconds to seconds */
 #define TIME_TO_SLEEP  3600        /* Time ESP32 will go to sleep (in seconds) 3600 seconds = 1 hour */
@@ -129,6 +118,7 @@ void setup() {
   digitalWrite(MODEM_RST, HIGH);
   digitalWrite(MODEM_POWER_ON, HIGH);
 
+#if TINY_GSM_USE_GPRS
   // Set GSM module baud rate and UART pins
   SerialAT.begin(115200, SERIAL_8N1, MODEM_RX, MODEM_TX);
   delay(3000);
@@ -142,19 +132,26 @@ void setup() {
   String modemInfo = modem.getModemInfo();
   SerialMon.print("Modem: ");
   SerialMon.println(modemInfo);
-
-  #if TINY_GSM_USE_GPRS
+#endif
+#if TINY_GSM_USE_GPRS
   // Unlock your SIM card with a PIN if needed
   if (strlen(simPIN) && modem.getSimStatus() != 3 ) {
     modem.simUnlock(simPIN);
   }
-  #endif
+#endif
   
   // You might need to change the BME280 I2C address, in our case it's 0x76
   if (!bme.begin(0x76, &I2CBME)) {
     Serial.println("Could not find a valid BME280 sensor, check wiring!");
     while (1);
   }
+
+#if TINY_GSM_USE_GPRS
+SerialMon.println("TINY_GSM_USE_GPRS");
+#endif
+#if TINY_GSM_USE_WIFI
+SerialMon.println("TINY_GSM_USE_WIFI");
+#endif
 
   // Configure the wake up source as timer wake up  
   esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
@@ -173,7 +170,14 @@ void loop() {
 #if TINY_GSM_USE_WIFI
   SerialMon.print("Connecting to WIFI: ");
   SerialMon.print(ssid);
-  connect = modem.networkConnect(ssid, wifiPass);
+  WiFi.begin(ssid, wifiPass);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    SerialMon.print(".");
+  }
+  WiFiClient client;
+  connect = true;
 #endif
   if (!connect) {
     SerialMon.println(" fail");
@@ -225,11 +229,13 @@ void loop() {
       SerialMon.println(F("GPRS disconnected"));
 #endif
 #if TINY_GSM_USE_WIFI
-      modem.networkDisconnect();
+      WiFi.disconnect();
+      //modem.networkDisconnect();
       SerialMon.println(F("WiFi disconnected"));
 #endif
     }
-  } 
+  }
+  delay(60000);
   // Put ESP32 into deep sleep mode (with timer wake up)
   esp_deep_sleep_start();
 }
