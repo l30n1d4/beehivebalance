@@ -9,7 +9,7 @@
 #define TINY_GSM_USE_WIFI true
 
 // Your GPRS credentials (leave empty, if not needed)
-const char apn[]      = "web.kenamobile.it";              // APN (example: internet.vodafone.pt) use https://wiki.apnchanger.org
+const char apn[]      = "web.kenamobile.it";              // APN (example: iliad) use https://wiki.apnchanger.org
 const char gprsUser[] = "";                               // GPRS User
 const char gprsPass[] = "";                               // GPRS Password
 
@@ -17,7 +17,7 @@ const char gprsPass[] = "";                               // GPRS Password
 const char simPIN[]   = ""; 
 
 // Your WIFI credentials (leave empty, if not needed)
-const char ssid[]     = "................";               // SSID
+const char ssid[]     = "................";               // SSID WIFI
 const char wifiPass[] = "................";               // WIFI Password
 
 // Server details
@@ -62,8 +62,7 @@ String apiKeyValue = "tPmAT5Ab3j7F9";
 #include <WiFi.h>
 #include <soc/rtc.h>               // for downspeed clock https://github.com/bogde/HX711/issues/75
 #include <HX711.h>
-
-HX711 scale;
+float HX711_CAL_FACTOR = - 19800;  //You must change this factor depends on your scale,sensors and etc.
 
 #ifdef DUMP_AT_COMMANDS
   #include <StreamDebugger.h>
@@ -81,28 +80,69 @@ TwoWire I2CPower = TwoWire(0);
 
 // I2C for BME280 sensor
 TwoWire I2CBME = TwoWire(1);
-Adafruit_BME280 bme; 
+Adafruit_BME280 bme;
+#define BME280_ADDR          0x76  // You might need to change the BME280 I2C address, in our case it's 0x76
+#define SEALEVELPRESSURE_HPA (1013.25)
 
 #if TINY_GSM_USE_GPRS
 // TinyGSM Client for Internet connection
 TinyGsmClient client(modem);
 #endif
 
-#define uS_TO_S_FACTOR 1000000     /* Conversion factor for micro seconds to seconds */
-#define TIME_TO_SLEEP  3600        /* Time ESP32 will go to sleep (in seconds) 3600 seconds = 1 hour */
+#define uS_TO_S_FACTOR 1000000     // Conversion factor for micro seconds to seconds
+#define TIME_TO_SLEEP  3600        // Time ESP32 will go to sleep (in seconds) 3600 seconds = 1 hour
 
 #define IP5306_ADDR          0x75
 #define IP5306_REG_SYS_CTL0  0x00
 
-bool setPowerBoostKeepOn(int en){
+bool setPowerBoostKeepOn(int en) {
   I2CPower.beginTransmission(IP5306_ADDR);
   I2CPower.write(IP5306_REG_SYS_CTL0);
   if (en) {
-    I2CPower.write(0x37); // Set bit1: 1 enable 0 disable boost keep on
+    I2CPower.write(0x37);          // Set bit1: 1 enable 0 disable boost keep on
   } else {
-    I2CPower.write(0x35); // 0x37 is default reg value
+    I2CPower.write(0x35);          // 0x37 is default reg value
   }
   return I2CPower.endTransmission() == 0;
+}
+
+float getWeight() {
+  HX711 scale;
+  scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
+  scale.set_scale(HX711_CAL_FACTOR); //Adjust to this calibration factor
+  SerialMon.print("Reading: ");
+  float weight = scale.get_units();
+  SerialMon.print(weight, 1);
+  SerialMon.print(" kg"); // You can change this to other type of weighing value and re-adjust the calibration factor.
+  SerialMon.print(" calibration_factor: ");
+  SerialMon.print(HX711_CAL_FACTOR);
+  SerialMon.println();
+  return weight;
+}
+
+bool getBme() {
+  float t = bme.readTemperature();
+  float p = (bme.readPressure() / 100.0F);
+  float h = bme.readHumidity();
+  float a = bme.readAltitude(SEALEVELPRESSURE_HPA);
+  if (isnan(t) || isnan(p) || isnan(h) || isnan(a)) {
+    SerialMon.println("Failed to read from BME sensor!");
+    return false;
+  }
+  SerialMon.print("Temperature = ");
+  SerialMon.print(t);
+  SerialMon.println(" *C");
+  SerialMon.print("Pressure = ");
+  SerialMon.print(p);
+  SerialMon.println(" hPa");
+  SerialMon.print("Approx. Altitude = ");
+  SerialMon.print(a);
+  SerialMon.println(" m");
+  SerialMon.print("Humidity = ");
+  SerialMon.print(h);
+  SerialMon.println(" %");
+  SerialMon.println();
+  return true;
 }
 
 void setup() {
@@ -149,41 +189,21 @@ void setup() {
   }
 #endif
   
-  // You might need to change the BME280 I2C address, in our case it's 0x76
-  if (!bme.begin(0x76, &I2CBME)) {
+  if (!bme.begin(BME280_ADDR, &I2CBME)) {
     Serial.println("Could not find a valid BME280 sensor, check wiring!");
     while (1);
   }
-  
-  //init HX711
-  SerialMon.print("Starting HX711: ");
-  scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
-  SerialMon.println("OK");
 
   // Configure the wake up source as timer wake up  
   esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
 }
 
 void loop() {
-  scale.power_up();
-  delay(500);
-  scale.set_scale(2280.f);                        // this value is obtained by calibrating the scale with known weights
-  scale.tare();                                   // reset the scale to 0
-  SerialMon.print("get_units() = ");
-  SerialMon.println(scale.get_units(), 1);
-  SerialMon.println("metti un peso entro 3s...");
-  delay(3000);
-  SerialMon.print("get_units() = ");
-  SerialMon.println(scale.get_units(), 1);
-  float weight = scale.get_units();
-
-  scale.power_down();              // put the ADC in sleep mode
-  
-  SerialMon.println("Temp: " + String(bme.readTemperature()));
-  SerialMon.println("Humi: " + String(bme.readHumidity()));
-  SerialMon.println("Pres: " + String(bme.readPressure()/100.0F));
-  
+  //scale.power_up();
+  float weight = getWeight();
+  bool okBme = getBme();
   bool connect = false;
+
 #if TINY_GSM_USE_GPRS
   SerialMon.print("Connecting to APN: ");
   SerialMon.print(apn);
@@ -224,7 +244,8 @@ void loop() {
                              + "&temperature=" + String(bme.readTemperature())
                              + "&humidity=" + String(bme.readHumidity())
                              + "&pressure=" + String(bme.readPressure()/100.0F)
-                             + "&wight=" + String(weight);
+                             + "&altitude=" + String(bme.readAltitude(SEALEVELPRESSURE_HPA))
+                             + "&weight=" + String(weight);
     
       client.print(String("POST ") + resource + " HTTP/1.1\r\n");
       client.print(String("Host: ") + server + "\r\n");
