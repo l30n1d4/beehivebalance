@@ -62,7 +62,7 @@ String apiKeyValue = "tPmAT5Ab3j7F9";
 #include <WiFi.h>
 #include <soc/rtc.h>               // for downspeed clock https://github.com/bogde/HX711/issues/75
 #include <HX711.h>
-float HX711_CAL_FACTOR = - 19800;  //You must change this factor depends on your scale,sensors and etc.
+float HX711_CAL_FACTOR = -1980;  //You must change this factor depends on your scale,sensors and etc.
 
 #ifdef DUMP_AT_COMMANDS
   #include <StreamDebugger.h>
@@ -106,14 +106,33 @@ bool setPowerBoostKeepOn(int en) {
   return I2CPower.endTransmission() == 0;
 }
 
+int8_t getBatteryLevel() {
+  I2CPower.beginTransmission(IP5306_ADDR);
+  I2CPower.write(0x78);
+  if (I2CPower.endTransmission(false) == 0
+   && I2CPower.requestFrom(IP5306_ADDR, 1)) {
+    switch (I2CPower.read() & 0xF0) {
+    case 0xE0: return 25;
+    case 0xC0: return 50;
+    case 0x80: return 75;
+    case 0x00: return 100;
+    default: return 0;
+    }
+  }
+  return -1;
+}
+
 float getWeight() {
   HX711 scale;
   scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
   scale.set_scale(HX711_CAL_FACTOR); //Adjust to this calibration factor
   SerialMon.print("Reading: ");
   float weight = scale.get_units();
-  SerialMon.print(weight, 1);
-  SerialMon.print(" kg"); // You can change this to other type of weighing value and re-adjust the calibration factor.
+  if (weight < 0) {
+    weight = 0.00;
+  }
+  SerialMon.print(weight);
+  SerialMon.print(" g."); // You can change this to other type of weighing value and re-adjust the calibration factor.
   SerialMon.print(" calibration_factor: ");
   SerialMon.print(HX711_CAL_FACTOR);
   SerialMon.println();
@@ -158,6 +177,9 @@ void setup() {
   // Keep power when running from battery
   bool isOk = setPowerBoostKeepOn(1);
   SerialMon.println(String("IP5306 KeepOn ") + (isOk ? "OK" : "FAIL"));
+
+  int8_t batt = getBatteryLevel();
+  SerialMon.println("Battery level: " + batt);
 
   // Set modem reset, enable, power pins
   pinMode(MODEM_PWKEY, OUTPUT);
@@ -241,11 +263,13 @@ void loop() {
       SerialMon.println("Performing HTTP POST request...");
       // Prepare your HTTP POST request data (Temperature in Celsius degrees)
       String httpRequestData = "api_key=" + apiKeyValue
-                             + "&temperature=" + String(bme.readTemperature())
+                             + "&temp_ext=" + String("25.00")
+                             + "&temp_int=" + String(bme.readTemperature())
                              + "&humidity=" + String(bme.readHumidity())
                              + "&pressure=" + String(bme.readPressure()/100.0F)
                              + "&altitude=" + String(bme.readAltitude(SEALEVELPRESSURE_HPA))
-                             + "&weight=" + String(weight);
+                             + "&weight="   + String(weight)
+                             + "&battery="  + String(getBatteryLevel());
     
       client.print(String("POST ") + resource + " HTTP/1.1\r\n");
       client.print(String("Host: ") + server + "\r\n");
